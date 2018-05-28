@@ -1,0 +1,9 @@
+[package]
+name = "minipre"
+version = "0.1.0"
+authors = ["Diggory Blake <diggsey@googlemail.com>"]
+description = "Minimal C-preprocessor in Rust"
+repository = "https://github.com/Diggsey/minipre"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
