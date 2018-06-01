@@ -1,6 +1,10 @@
+extern crate regex;
+
 use std::collections::BTreeMap;
 use std::io::{BufRead, Write, self};
 use std::fmt;
+
+use regex::{Regex, Captures, Replacer};
 
 #[derive(Debug, Clone)]
 pub struct Context {
@@ -56,6 +60,26 @@ impl Context {
         self.defs.insert(name.into(), value.into());
         self
     }
+    fn build_regex(&self) -> Regex {
+        if self.defs.is_empty() {
+            Regex::new("$_")
+                .expect("Regex should be valid")
+        } else {
+            let pat: String = self.defs.keys()
+                .flat_map(|k| vec!["|", &k])
+                .skip(1)
+                .collect();
+            Regex::new(&format!("\\b(?:{})\\b", pat))
+                .expect("Regex should be valid")
+        }
+    }
+    fn replacer<'a>(&'a self) -> impl Replacer + 'a {
+        move |captures: &Captures| self.defs.get(
+            captures.get(0)
+                .expect("At least one capture")
+                .as_str()
+        ).expect("Found def for match").clone()
+    }
     fn skip_whitespace(&self, expr: &mut &str) {
         *expr = expr.trim_left();
     }
@@ -72,10 +96,10 @@ impl Context {
         })?.is_digit(10) {
             Ok(term == "1")
         } else {
-            Ok(self.defs.get(term).ok_or_else(|| Error::Syntax {
+            Err(Error::Syntax {
                 line,
                 msg: "Undefined identifier"
-            })? == "1")
+            })
         }
     }
     fn eval_unary(&self, expr: &mut &str, line: u32) -> Result<bool, Error> {
@@ -134,14 +158,20 @@ pub fn process<I: BufRead, O: Write>(mut input: I, mut output: O, context: &mut 
     let mut state = State::Active;
     let mut line = 0;
 
+    let regex = context.build_regex();
+    let mut replacer = context.replacer();
+
     while input.read_line(&mut buf)? > 0 {
         line += 1;
         {
-            let substr = buf.trim();
+            let new_line = regex.replace_all(&buf, replacer.by_ref());
+            let substr = new_line.trim();
             if substr.starts_with("#") {
                 let mut parts = substr.splitn(2, "//").next().unwrap().splitn(2, " ");
                 let name = parts.next().unwrap();
-                let maybe_expr = parts.next().map(|s| s.trim()).filter(|s| !s.is_empty());
+                let maybe_expr = parts.next()
+                    .map(|s| s.trim())
+                    .and_then(|s| if s.is_empty() { None } else { Some(s) });
 
                 match name {
                     "#if" => {
@@ -204,7 +234,7 @@ pub fn process<I: BufRead, O: Write>(mut input: I, mut output: O, context: &mut 
                     }
                 }
             } else if state == State::Active {
-                output.write_all(buf.as_bytes())?;
+                output.write_all(new_line.as_bytes())?;
             }
         }
         buf.clear();
@@ -450,4 +480,26 @@ mod tests {
         ");
     }
 
+    #[test]
+    fn expansion() {
+        assert_eq!(&process_str("
+            some
+            FOO-BAR
+            multiline
+        ", Context::new().define("FOO", "0")).unwrap(), "
+            some
+            0-BAR
+            multiline
+        ");
+
+        assert_eq!(&process_str("
+            some
+            FOO_BAR
+            multiline
+        ", Context::new().define("FOO", "0")).unwrap(), "
+            some
+            FOO_BAR
+            multiline
+        ");
+    }
 }
